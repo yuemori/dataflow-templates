@@ -27,6 +27,7 @@ import org.apache.beam.sdk.io.gcp.bigquery.WriteResult;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessageWithAttributesCoder;
+import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.options.Validation;
@@ -49,9 +50,70 @@ import java.nio.charset.StandardCharsets;
 import static org.wakaba260.dataflow.templates.JavascriptUdfExecutor.FailsafeTableDestinationJavascriptUdf.TableDestinationUdfOptions;
 import static org.wakaba260.dataflow.templates.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf.TransformUdfOptions;
 
+/**
+ * The {@link PubSubToBigQueryDynamicDestination} pipeline is a streaming pipeline which ingests data in JSON format
+ * from Cloud Pub/Sub, executes a trainsform and table destination UDF, and outputs the resulting records to BigQuery. Any errors
+ * which occur in the transformation of the data or execution of the UDF will be output to a
+ * separate errors table in BigQuery. The errors table will be created if it does not exist prior to
+ * execution. Both output and error tables are specified by the user as template parameters.
+ *
+ * <p><b>Pipeline Requirements</b>
+ *
+ * <ul>
+ *   <li>The Pub/Sub topic exists.
+ *   <li>The BigQuery output table exists.
+ * </ul>
+ *
+ * <p><b>Example Usage</b>
+ *
+ * <pre>
+ * # Set the pipeline vars
+ * PROJECT_ID=PROJECT ID HERE
+ * BUCKET_NAME=BUCKET NAME HERE
+ * PIPELINE_FOLDER=gs://${BUCKET_NAME}/dataflow/pipelines/pubsub-to-bigquery-dynamic-destination
+ * USE_SUBSCRIPTION=true or false depending on whether the pipeline should read
+ *                  from a Pub/Sub Subscription or a Pub/Sub Topic.
+ *
+ * # Set the runner
+ * RUNNER=DataflowRunner
+ *
+ * # Build the template
+ * mvn compile exec:java \
+ * -Dexec.mainClass=org.wakaba260.dataflow.templates.PubSubToBigQueryDynamicDestination \
+ * -Dexec.cleanupDaemonThreads=false \
+ * -Dexec.args=" \
+ * --project=${PROJECT_ID} \
+ * --stagingLocation=${PIPELINE_FOLDER}/staging \
+ * --tempLocation=${PIPELINE_FOLDER}/temp \
+ * --templateLocation=${PIPELINE_FOLDER}/template \
+ * --runner=${RUNNER}
+ * --useSubscription=${USE_SUBSCRIPTION}
+ * "
+ *
+ * # Execute the template
+ * JOB_NAME=pubsub-to-bigquery-$USER-`date +"%Y%m%d-%H%M%S%z"`
+ *
+ * # Execute a pipeline to read from a Topic.
+ * gcloud dataflow jobs run ${JOB_NAME} \
+ * --gcs-location=${PIPELINE_FOLDER}/template \
+ * --zone=us-east1-d \
+ * --parameters \
+ * "inputTopic=projects/${PROJECT_ID}/topics/input-topic-name,\
+ * outputTableSpec=${PROJECT_ID}:dataset-id.output-table,\
+ * outputDeadletterTable=${PROJECT_ID}:dataset-id.deadletter-table"
+ *
+ * # Execute a pipeline to read from a Subscription.
+ * gcloud dataflow jobs run ${JOB_NAME} \
+ * --gcs-location=${PIPELINE_FOLDER}/template \
+ * --zone=us-east1-d \
+ * --parameters \
+ * "inputSubscription=projects/${PROJECT_ID}/subscriptions/input-subscription-name,\
+ * outputTableSpec=${PROJECT_ID}:dataset-id.output-table,\
+ * outputDeadletterTable=${PROJECT_ID}:dataset-id.deadletter-table"
+ * </pre>
+ */
 public class PubSubToBigQueryDynamicDestination {
     public interface Options extends DataflowPipelineOptions, TableDestinationUdfOptions, TransformUdfOptions {
-        @Validation.Required
         @Description(
             "The Cloud Pub/Sub subscription to consume from. "
                 + "The name should be in the format of "
@@ -60,6 +122,11 @@ public class PubSubToBigQueryDynamicDestination {
         ValueProvider<String> getInputSubscription();
         void setInputSubscription(ValueProvider<String> subscription);
 
+        @Description("Pub/Sub topic to read the input from")
+        ValueProvider<String> getInputTopic();
+
+        void setInputTopic(ValueProvider<String> value);
+
         @Validation.Required
         @Description(
             "The dead-letter table to output to within BigQuery in <project-id>:<dataset>.<table> "
@@ -67,6 +134,12 @@ public class PubSubToBigQueryDynamicDestination {
         ValueProvider<String> getOutputDeadletterTable();
 
         void setOutputDeadletterTable(ValueProvider<String> value);
+
+        @Description(
+            "This determines whether the template reads from " + "a pub/sub subscription or a topic")
+        @Default.Boolean(false)
+        Boolean getUseSubscription();
+        void setUseSubscription(Boolean value);
     }
 
     final static FailsafeElementCoder<PubsubMessage, String> CODER =
@@ -117,10 +190,13 @@ public class PubSubToBigQueryDynamicDestination {
         /*
          * Step #1: Read messages from PubSub
          */
-        messages = pipeline.apply(
-            "ReadPubSubSubscription",
-            PubsubIO.readMessagesWithAttributes()
-                .fromSubscription(options.getInputSubscription()));
+        if(options.getUseSubscription()) {
+            messages = pipeline.apply("ReadPubSubSubscription",
+                PubsubIO.readMessagesWithAttributes().fromSubscription(options.getInputSubscription()));
+        } else {
+            messages = pipeline.apply("ReadPubSubTopic",
+                PubsubIO.readMessagesWithAttributes().fromTopic(options.getInputTopic()));
+        }
 
         /*
          * Step #2: Create KV of DestinationTable and transformed String by UDF.
