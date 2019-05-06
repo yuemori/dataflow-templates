@@ -42,13 +42,15 @@ import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.ValueInSingleWindow;
-import org.wakaba260.dataflow.templates.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf;
+import org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor;
+import org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf;
+import org.wakaba260.dataflow.templates.common.BigQueryConverters;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
-import static org.wakaba260.dataflow.templates.JavascriptUdfExecutor.FailsafeTableDestinationJavascriptUdf.TableDestinationUdfOptions;
-import static org.wakaba260.dataflow.templates.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf.TransformUdfOptions;
+import static org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.FailsafeTableDestinationJavascriptUdf.TableDestinationUdfOptions;
+import static org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf.TransformUdfOptions;
 
 /**
  * The {@link PubSubToBigQueryDynamicDestination} pipeline is a streaming pipeline which ingests data in JSON format
