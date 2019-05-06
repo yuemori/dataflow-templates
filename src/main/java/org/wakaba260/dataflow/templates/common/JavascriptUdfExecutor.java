@@ -1,4 +1,4 @@
-package org.wakaba260.dataflow.templates;
+package org.wakaba260.dataflow.templates.common;
 
 import com.google.auto.value.AutoValue;
 import com.google.cloud.teleport.templates.common.JavascriptTextTransformer;

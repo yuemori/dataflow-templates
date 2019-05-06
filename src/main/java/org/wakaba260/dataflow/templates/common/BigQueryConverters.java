@@ -1,4 +1,4 @@
-package org.wakaba260.dataflow.templates;
+package org.wakaba260.dataflow.templates.common;
 
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.auto.value.AutoValue;
