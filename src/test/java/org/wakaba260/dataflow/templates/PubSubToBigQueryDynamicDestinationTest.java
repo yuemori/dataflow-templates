@@ -35,7 +35,7 @@ public class PubSubToBigQueryDynamicDestinationTest {
         Resources.getResource(RESOURCES_DIR + "transform.js").getPath();
 
     @Test
-    public void testPubSubToBigQueryE2E() throws Exception {
+    public void testPubSubToBigQueryE2E() {
         final String payload = "{\"ticker\": \"GOOGL\", \"price\": 1006.94, \"type\": \"payment\"}";
 
         final PubsubMessage message =

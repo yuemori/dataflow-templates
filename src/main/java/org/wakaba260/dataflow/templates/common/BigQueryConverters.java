@@ -22,6 +22,8 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 public class BigQueryConverters {
+
+
     @AutoValue
     public abstract static class JsonToTableRow<T> extends PTransform<PCollection<FailsafeElement<T, KV<TableDestination, String>>>, PCollectionTuple> {
         JsonToTableRow() {

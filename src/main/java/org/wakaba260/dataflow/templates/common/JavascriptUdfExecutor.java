@@ -1,10 +1,14 @@
 package org.wakaba260.dataflow.templates.common;
 
 import com.google.auto.value.AutoValue;
+import com.google.cloud.teleport.coders.FailsafeElementCoder;
 import com.google.cloud.teleport.templates.common.JavascriptTextTransformer;
 import com.google.cloud.teleport.values.FailsafeElement;
 import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
+import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.CoderRegistry;
+import org.apache.beam.sdk.coders.StringUtf8Coder;
 import org.apache.beam.sdk.io.gcp.bigquery.TableDestination;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
@@ -20,6 +24,7 @@ import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
 
 import javax.annotation.Nullable;
+import java.io.Serializable;
 
 @AutoValue
 public abstract class JavascriptUdfExecutor {
@@ -33,7 +38,7 @@ public abstract class JavascriptUdfExecutor {
     }
 
     @AutoValue
-    public abstract static class FailsafeTransformJavascriptUdf<T, T2> extends PTransform<PCollection<FailsafeElement<T, KV<T2, String>>>, PCollectionTuple> {
+    public abstract static class FailsafeTransformJavascriptUdf<T> extends PTransform<PCollection<FailsafeElement<T, KV<TableDestination, String>>>, PCollectionTuple> {
         FailsafeTransformJavascriptUdf() {
         }
 
@@ -41,15 +46,15 @@ public abstract class JavascriptUdfExecutor {
         @Nullable
         public abstract ValueProvider<String> functionName();
 
-        public abstract TupleTag<FailsafeElement<T, KV<T2, String>>> successTag();
+        public abstract TupleTag<FailsafeElement<T, KV<TableDestination, String>>> successTag();
         public abstract TupleTag<FailsafeElement<T, String>> failureTag();
 
-        public static <T, T2> Builder<T, T2> newBuilder() {
-            return new AutoValue_JavascriptUdfExecutor_FailsafeTransformJavascriptUdf.Builder<T, T2>();
+        public static <T> Builder<T> newBuilder() {
+            return new AutoValue_JavascriptUdfExecutor_FailsafeTransformJavascriptUdf.Builder<T>();
         }
 
-        public PCollectionTuple expand(PCollection<FailsafeElement<T, KV<T2, String>>> elements) {
-          return (PCollectionTuple)elements.apply("ProcessTransformUdf", ParDo.of(new DoFn<FailsafeElement<T, KV<T2, String>>, FailsafeElement<T, KV<T2, String>>>() {
+        public PCollectionTuple expand(PCollection<FailsafeElement<T, KV<TableDestination, String>>> elements) {
+          return elements.apply("ProcessTransformUdf", ParDo.of(new DoFn<FailsafeElement<T, KV<TableDestination, String>>, FailsafeElement<T, KV<TableDestination, String>>>() {
               private JavascriptTextTransformer.JavascriptRuntime javascriptRuntime;
 
               @Setup
@@ -61,7 +66,7 @@ public abstract class JavascriptUdfExecutor {
 
               @ProcessElement
               public void processElement(ProcessContext context) {
-                  FailsafeElement<T, KV<T2, String>> element = context.element();
+                  FailsafeElement<T, KV<TableDestination, String>> element = context.element();
                   String payloadStr = element.getPayload().getValue();
 
                   try {
@@ -81,19 +86,19 @@ public abstract class JavascriptUdfExecutor {
         }
 
         @AutoValue.Builder
-        public abstract static class Builder<T, T2> {
+        public abstract static class Builder<T> {
             public Builder() {
             }
 
-            public abstract Builder<T, T2> setFileSystemPath(@Nullable ValueProvider<String> var1);
+            public abstract Builder<T> setFileSystemPath(@Nullable ValueProvider<String> var1);
 
-            public abstract Builder<T, T2> setFunctionName(@Nullable ValueProvider<String> var1);
+            public abstract Builder<T> setFunctionName(@Nullable ValueProvider<String> var1);
 
-            public abstract Builder<T, T2> setSuccessTag(TupleTag<FailsafeElement<T, KV<T2, String>>> var1);
+            public abstract Builder<T> setSuccessTag(TupleTag<FailsafeElement<T, KV<TableDestination, String>>> var1);
 
-            public abstract Builder<T, T2> setFailureTag(TupleTag<FailsafeElement<T, String>> var1);
+            public abstract Builder<T> setFailureTag(TupleTag<FailsafeElement<T, String>> var1);
 
-            public abstract FailsafeTransformJavascriptUdf<T, T2> build();
+            public abstract FailsafeTransformJavascriptUdf<T> build();
         }
 
         public interface TransformUdfOptions extends PipelineOptions {

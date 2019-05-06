@@ -1,8 +1,6 @@
 package org.wakaba260.dataflow.templates;
 
 import com.google.common.collect.ImmutableList;
-import com.google.api.client.json.JsonFactory;
-import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.cloud.teleport.coders.FailsafeElementCoder;
 import com.google.cloud.teleport.templates.common.ErrorConverters;
@@ -14,41 +12,31 @@ import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.coders.CoderRegistry;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposition;
 import org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.Method;
-import org.apache.beam.sdk.io.gcp.bigquery.BigQueryInsertError;
-import org.apache.beam.sdk.io.gcp.bigquery.InsertRetryPolicy;
 import org.apache.beam.sdk.io.gcp.bigquery.TableDestination;
 import org.apache.beam.sdk.io.gcp.bigquery.TableDestinationCoder;
 import org.apache.beam.sdk.io.gcp.bigquery.TableRowJsonCoder;
-import org.apache.beam.sdk.io.gcp.bigquery.WriteResult;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessageWithAttributesCoder;
-import org.apache.beam.sdk.options.Default;
-import org.apache.beam.sdk.options.Description;
-import org.apache.beam.sdk.options.PipelineOptionsFactory;
-import org.apache.beam.sdk.options.Validation;
-import org.apache.beam.sdk.options.ValueProvider;
+import org.apache.beam.sdk.options.*;
 import org.apache.beam.sdk.transforms.Flatten;
 import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TupleTag;
-import org.apache.beam.sdk.values.ValueInSingleWindow;
-import org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor;
+import org.wakaba260.dataflow.templates.common.*;
 import org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf;
-import org.wakaba260.dataflow.templates.common.BigQueryConverters;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
+import static org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
+import static org.wakaba260.dataflow.templates.common.BigQueryInsertWithDeadLetter.BigQueryInsertWithDeadLetterOptions;
 import static org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.FailsafeTableDestinationJavascriptUdf.TableDestinationUdfOptions;
 import static org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.FailsafeTransformJavascriptUdf.TransformUdfOptions;
 
@@ -115,7 +103,7 @@ import static org.wakaba260.dataflow.templates.common.JavascriptUdfExecutor.Fail
  * </pre>
  */
 public class PubSubToBigQueryDynamicDestination {
-    public interface Options extends DataflowPipelineOptions, TableDestinationUdfOptions, TransformUdfOptions {
+    public interface Options extends DataflowPipelineOptions, TableDestinationUdfOptions, TransformUdfOptions, BigQueryInsertWithDeadLetterOptions {
         @Description(
             "The Cloud Pub/Sub subscription to consume from. "
                 + "The name should be in the format of "
@@ -128,14 +116,6 @@ public class PubSubToBigQueryDynamicDestination {
         ValueProvider<String> getInputTopic();
 
         void setInputTopic(ValueProvider<String> value);
-
-        @Validation.Required
-        @Description(
-            "The dead-letter table to output to within BigQuery in <project-id>:<dataset>.<table> "
-                + "format. If it doesn't exist, it will be created during pipeline execution.")
-        ValueProvider<String> getOutputDeadletterTable();
-
-        void setOutputDeadletterTable(ValueProvider<String> value);
 
         @Description(
             "This determines whether the template reads from " + "a pub/sub subscription or a topic")
@@ -170,9 +150,6 @@ public class PubSubToBigQueryDynamicDestination {
     static final TupleTag<FailsafeElement<PubsubMessage, String>> JSON_TO_TABLE_ROW_TRANSFORM_DEADLETTER_OUT =
         new TupleTag<FailsafeElement<PubsubMessage, String>>() {};
 
-    static final FailsafeElementCoder<String, String> FAILSAFE_ELEMENT_CODER =
-        FailsafeElementCoder.of(StringUtf8Coder.of(), StringUtf8Coder.of());
-
     public static void main(String[] args) {
         Options options = PipelineOptionsFactory.fromArgs(args).withValidation().as(Options.class);
 
@@ -188,6 +165,13 @@ public class PubSubToBigQueryDynamicDestination {
         coderRegistry.registerCoderForType(CODER.getEncodedTypeDescriptor(), CODER);
         coderRegistry.registerCoderForType(FAILSAFE_PAYLOAD_CODER.getEncodedTypeDescriptor(), FAILSAFE_PAYLOAD_CODER);
         coderRegistry.registerCoderForType(FAILSAFE_TABLE_ROW_CODER.getEncodedTypeDescriptor(), FAILSAFE_TABLE_ROW_CODER);
+
+        FailsafeElementCoder bigQueryInsertCoder = BigQueryInsertWithDeadLetter.getCoder();
+        coderRegistry.registerCoderForType(bigQueryInsertCoder.getEncodedTypeDescriptor(), bigQueryInsertCoder);
+
+        options.setBigQueryWriteDisposition(WriteDisposition.WRITE_APPEND);
+        options.setBigQueryCreateDisposition(CreateDisposition.CREATE_NEVER);
+        options.setBigQueryInsertMethod(Method.STREAMING_INSERTS);
 
         /*
          * Step #1: Read messages from PubSub
@@ -210,31 +194,9 @@ public class PubSubToBigQueryDynamicDestination {
         /*
          * Step #3: Write the successful records to BigQuery.
          */
-        WriteResult writeResult =
-            convertedTableRows
-                .get(JSON_TO_TABLE_ROW_TRANSFORM_OUT)
-                .apply(
-                    BigQueryIO.<KV<TableDestination, TableRow>>write()
-                        .withoutValidation()
-                        .withCreateDisposition(CreateDisposition.CREATE_NEVER)
-                        .withWriteDisposition(Write.WriteDisposition.WRITE_APPEND)
-                        .withFormatFunction((SerializableFunction<KV<TableDestination, TableRow>, TableRow>) element -> element.getValue())
-                        .withExtendedErrorInfo()
-                        .withMethod(Method.STREAMING_INSERTS)
-                        .withFailedInsertRetryPolicy(InsertRetryPolicy.retryTransientErrors())
-                        .to((SerializableFunction<ValueInSingleWindow<KV<TableDestination, TableRow>>, TableDestination>) element -> element.getValue().getKey()));
-
-        /*
-         * Step 3 Contd.
-         * Elements that failed inserts into BigQuery are extracted and converted to FailsafeElement
-         */
-        PCollection<FailsafeElement<String, String>> failedInserts =
-            writeResult
-                .getFailedInsertsWithErr()
-                .apply("WrapInsertionErrors",
-                    MapElements.into(FAILSAFE_ELEMENT_CODER.getEncodedTypeDescriptor())
-                    .via((BigQueryInsertError e) -> wrapBigQueryInsertError(e)))
-                .setCoder(FAILSAFE_ELEMENT_CODER);
+        convertedTableRows
+            .get(JSON_TO_TABLE_ROW_TRANSFORM_OUT)
+            .apply(new BigQueryInsertWithDeadLetter(options));
 
         /*
          * Step #4: Write records that failed table row transformation
@@ -248,18 +210,9 @@ public class PubSubToBigQueryDynamicDestination {
             .apply("Flatten", Flatten.pCollections())
             .apply("WriteFailedRecords",
                 ErrorConverters.WritePubsubMessageErrors.newBuilder()
-                    .setErrorRecordsTable( options.getOutputDeadletterTable())
+                    .setErrorRecordsTable(options.getOutputDeadletterTable())
                     .setErrorRecordsTableSchema(ResourceUtils.getDeadletterTableSchemaJson())
                     .build());
-
-        /*
-         * Step #5: Insert records that failed insert into deadletter table
-         */
-        failedInserts.apply("WriteFailedRecords",
-            ErrorConverters.WriteStringMessageErrors.newBuilder()
-                .setErrorRecordsTable(options.getOutputDeadletterTable())
-                .setErrorRecordsTableSchema(ResourceUtils.getDeadletterTableSchemaJson())
-                .build());
 
         return pipeline.run();
     }
@@ -292,7 +245,7 @@ public class PubSubToBigQueryDynamicDestination {
                 destinationTableUdfOut
                     .get(DESTINATION_TABLE_UDF_OUT)
                     .apply("InvokeUDF",
-                        FailsafeTransformJavascriptUdf.<PubsubMessage, TableDestination>newBuilder()
+                        FailsafeTransformJavascriptUdf.<PubsubMessage>newBuilder()
                             .setFileSystemPath(options.getJavascriptTextTableDestinationGcsPath())
                             .setFunctionName(options.getJavascriptTextTransformFunctionName())
                             .setSuccessTag(TRANSFORM_UDF_OUT)
@@ -315,21 +268,5 @@ public class PubSubToBigQueryDynamicDestination {
                 .and(JSON_TO_TABLE_ROW_TRANSFORM_OUT, jsonToTableRowOut.get(JSON_TO_TABLE_ROW_TRANSFORM_OUT))
                 .and(JSON_TO_TABLE_ROW_TRANSFORM_DEADLETTER_OUT, jsonToTableRowOut.get(JSON_TO_TABLE_ROW_TRANSFORM_DEADLETTER_OUT));
         }
-    }
-
-    protected static FailsafeElement<String, String> wrapBigQueryInsertError(BigQueryInsertError insertError) {
-        FailsafeElement<String, String> failsafeElement;
-
-        JsonFactory JSON_FACTORY = JacksonFactory.getDefaultInstance();
-        try {
-            TableRow row = insertError.getRow();
-            row.setFactory(JSON_FACTORY);
-            failsafeElement = FailsafeElement.of(row.toString(), row.toString());
-            failsafeElement.setErrorMessage(insertError.getError().toPrettyString());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-
-        return failsafeElement;
     }
 }
