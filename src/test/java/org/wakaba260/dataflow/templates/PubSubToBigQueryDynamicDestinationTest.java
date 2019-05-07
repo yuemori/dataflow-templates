@@ -12,6 +12,7 @@ import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
+import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.TimestampedValue;
@@ -20,6 +21,8 @@ import org.joda.time.DateTimeZone;
 import org.joda.time.Instant;
 import org.junit.Rule;
 import org.junit.Test;
+import org.wakaba260.dataflow.templates.common.PubsubMessagePayload;
+import org.wakaba260.dataflow.templates.common.Record;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
@@ -45,24 +48,23 @@ public class PubSubToBigQueryDynamicDestinationTest {
             new DateTime(2022, 2, 22, 22, 22, 22, 222, DateTimeZone.UTC).toInstant();
 
         CoderRegistry coderRegistry = pipeline.getCoderRegistry();
-        coderRegistry.registerCoderForType(CODER.getEncodedTypeDescriptor(), CODER);
-        coderRegistry.registerCoderForType(FAILSAFE_PAYLOAD_CODER.getEncodedTypeDescriptor(), FAILSAFE_PAYLOAD_CODER);
-        coderRegistry.registerCoderForType(FAILSAFE_TABLE_ROW_CODER.getEncodedTypeDescriptor(), FAILSAFE_TABLE_ROW_CODER);
+        coderRegistry.registerCoderForType(PAYLOAD_CODER.getEncodedTypeDescriptor(), PAYLOAD_CODER);
+        coderRegistry.registerCoderForType(RECORD_CODER.getEncodedTypeDescriptor(), RECORD_CODER);
 
         // Parameters
         ValueProvider<String> transformPath = pipeline.newProvider(TRANSFORM_FILE_PATH);
         ValueProvider<String> transformFunction = pipeline.newProvider("transform");
-        ValueProvider<String> destinationTableFunction = pipeline.newProvider("resolveDestination");
+        ValueProvider<String> destinationTableFunction = pipeline.newProvider("getDestinationTableName");
         ValueProvider<String> project = pipeline.newProvider("myProject");
         ValueProvider<String> datasetId = pipeline.newProvider("myDataset");
 
         Options options = PipelineOptionsFactory.create().as(Options.class);
 
-        options.setJavascriptTextTableDestinationGcsPath(transformPath);
-        options.setJavascriptTextTransformFunctionName(transformFunction);
-        options.setJavascriptTextTableDestinationFunctionName(destinationTableFunction);
-        options.setDestinationProject(project);
-        options.setDestinationDatasetId(datasetId);
+        options.setJavascriptUdfGcsPath(transformPath);
+        options.setJavascriptUdfTransformFunctionName(transformFunction);
+        options.setJavascriptUdfGetTableNameFunctionName(destinationTableFunction);
+        options.setDynamicDestinationProject(project);
+        options.setDynamicDestinationDatasetId(datasetId);
 
         // Build pipeline
         PCollectionTuple transformOut =
@@ -71,6 +73,9 @@ public class PubSubToBigQueryDynamicDestinationTest {
                     "CreateInput",
                     Create.timestamped(TimestampedValue.of(message, timestamp))
                         .withCoder(PubsubMessageWithAttributesCoder.of()))
+                .apply("MapToPayload",
+                    MapElements.into(PAYLOAD_CODER.getEncodedTypeDescriptor())
+                        .via((PubsubMessage m) -> PubsubMessagePayload.of(m)))
                 .apply("ConvertMessageToTableRow", new PubSubMessageToTableRow(options));
 
         // Assert
@@ -79,9 +84,9 @@ public class PubSubToBigQueryDynamicDestinationTest {
         PAssert.that(transformOut.get(JSON_TO_TABLE_ROW_TRANSFORM_OUT))
             .satisfies(
                 collection -> {
-                    KV<TableDestination, TableRow> result = collection.iterator().next();
-                    TableDestination destination = result.getKey();
-                    TableRow row = result.getValue();
+                    Record result = collection.iterator().next();
+                    TableDestination destination = result.getDestination();
+                    TableRow row = result.getRow();
                     assertThat(row.get("ticker"), is(equalTo("GOOGL")));
                     assertThat(row.get("price"), is(equalTo(1006.94)));
                     assertThat(destination.getTableSpec(), is(equalTo("myProject:myDataset.payment")));

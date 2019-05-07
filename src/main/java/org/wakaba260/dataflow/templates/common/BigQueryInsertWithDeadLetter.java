@@ -24,7 +24,7 @@ import static org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.CreateDisposi
 import static org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.Method;
 import static org.apache.beam.sdk.io.gcp.bigquery.BigQueryIO.Write.WriteDisposition;
 
-public class BigQueryInsertWithDeadLetter extends PTransform<PCollection<KV<TableDestination, TableRow>>, WriteResult> {
+public class BigQueryInsertWithDeadLetter<T extends Payload> extends PTransform<PCollection<Record<T>>, WriteResult> {
     static final FailsafeElementCoder<String, String> FAILSAFE_ELEMENT_CODER =
             FailsafeElementCoder.of(StringUtf8Coder.of(), StringUtf8Coder.of());
     private final BigQueryInsertWithDeadLetterOptions options;
@@ -34,10 +34,6 @@ public class BigQueryInsertWithDeadLetter extends PTransform<PCollection<KV<Tabl
     }
 
     public interface BigQueryInsertWithDeadLetterOptions extends PipelineOptions {
-        @Default.Enum("CREATE_NEVER")
-        CreateDisposition getBigQueryCreateDisposition();
-        void setBigQueryCreateDisposition(CreateDisposition createDisposition);
-
         @Default.Enum("WRITE_APPEND")
         WriteDisposition getBigQueryWriteDisposition();
         void setBigQueryWriteDisposition(WriteDisposition writeDisposition);
@@ -60,19 +56,19 @@ public class BigQueryInsertWithDeadLetter extends PTransform<PCollection<KV<Tabl
     }
 
     @Override
-    public WriteResult expand(PCollection<KV<TableDestination, TableRow>> input) {
+    public WriteResult expand(PCollection<Record<T>> input) {
         WriteResult writeResult=
             input
                 .apply(
-                    BigQueryIO.<KV<TableDestination, TableRow>>write()
+                    BigQueryIO.<Record<T>>write()
                         .withoutValidation()
-                        .withCreateDisposition(options.getBigQueryCreateDisposition())
+                        .withCreateDisposition(CreateDisposition.CREATE_NEVER)
                         .withWriteDisposition(options.getBigQueryWriteDisposition())
-                        .withFormatFunction((SerializableFunction<KV<TableDestination, TableRow>, TableRow>) element -> element.getValue())
+                        .withFormatFunction((SerializableFunction<Record<T>, TableRow>) record -> record.getRow())
                         .withExtendedErrorInfo()
                         .withMethod(options.getBigQueryInsertMethod())
                         .withFailedInsertRetryPolicy(InsertRetryPolicy.retryTransientErrors())
-                        .to((SerializableFunction<ValueInSingleWindow<KV<TableDestination, TableRow>>, TableDestination>) element -> element.getValue().getKey()));
+                        .to((SerializableFunction<ValueInSingleWindow<Record<T>>, TableDestination>) record -> record.getValue().getDestination()));
 
         PCollection<FailsafeElement<String, String>> failedInserts =
             writeResult
@@ -89,7 +85,7 @@ public class BigQueryInsertWithDeadLetter extends PTransform<PCollection<KV<Tabl
                 .build());
     }
 
-    protected static FailsafeElement<String, String> wrapBigQueryInsertError(BigQueryInsertError insertError) {
+    public static FailsafeElement<String, String> wrapBigQueryInsertError(BigQueryInsertError insertError) {
         FailsafeElement<String, String> failsafeElement;
 
         JsonFactory JSON_FACTORY = JacksonFactory.getDefaultInstance();

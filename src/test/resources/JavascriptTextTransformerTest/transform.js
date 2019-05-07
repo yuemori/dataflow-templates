@@ -3,7 +3,7 @@ function transform(inJson) {
   return JSON.stringify(obj);
 }
 
-function resolveDestination(inJson) {
+function getDestinationTableName(inJson) {
   var obj = JSON.parse(inJson);
 
   if(obj["type"] != null) {

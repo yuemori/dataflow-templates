@@ -21,7 +21,74 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
-public class BigQueryConverters {
+@AutoValue
+public abstract class BigQueryConverters {
+    @AutoValue
+    public abstract static class RecordToTableRow<T extends Payload> extends PTransform<PCollection<Record<T>>, PCollectionTuple> {
+        RecordToTableRow() {
+        }
+
+        public static <T extends Payload> RecordToTableRow.Builder<T> newBuilder() {
+            return new AutoValue_BigQueryConverters_RecordToTableRow.Builder<T>();
+        }
+
+        public abstract TupleTag<Record<T>> successTag();
+
+        public abstract TupleTag<Record<T>> failureTag();
+
+        public class Processor<T extends Payload> extends DoFn<Record<T>, Record<T>> {
+            private final TupleTag<Record<T>> failureTag;
+
+            public Processor(TupleTag<Record<T>> failureTag) {
+                this.failureTag = failureTag;
+            }
+
+            @ProcessElement
+            public void processElement(ProcessContext context) {
+                Record<T> record = context.element();
+                String payload = record.getPayload();
+
+                try {
+                    TableRow row = convertJsonToTableRow(payload);
+                    context.output(Record.<T>of(record, row));
+                } catch (Exception e) {
+                    context.output(this.failureTag, Record.of(record, e));
+                }
+            }
+        }
+
+        public PCollectionTuple expand(PCollection<Record<T>> elements) {
+            return elements.apply("RecordToTableRow",
+                ParDo.of(new Processor<T>(this.failureTag()))
+                    .withOutputTags(this.successTag(), TupleTagList.of(this.failureTag())));
+        }
+
+
+        private static TableRow convertJsonToTableRow(String json) {
+            TableRow row;
+            // Parse the JSON into a {@link TableRow} object.
+            try (InputStream inputStream = new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8))) {
+                row = TableRowJsonCoder.of().decode(inputStream, Coder.Context.OUTER);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to serialize json to table row: " + json, e);
+            }
+
+            return row;
+        }
+
+        @AutoValue.Builder
+        public abstract static class Builder<T extends Payload> {
+            public Builder() {
+            }
+
+            public abstract RecordToTableRow.Builder<T> setSuccessTag(TupleTag<Record<T>> var1);
+
+            public abstract RecordToTableRow.Builder<T> setFailureTag(TupleTag<Record<T>> var1);
+
+            public abstract RecordToTableRow<T> build();
+        }
+
+    }
 
 
     @AutoValue
