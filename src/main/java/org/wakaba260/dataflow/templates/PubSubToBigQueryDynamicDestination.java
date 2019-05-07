@@ -164,7 +164,6 @@ public class PubSubToBigQueryDynamicDestination {
         coderRegistry.registerCoderForType(bigQueryInsertCoder.getEncodedTypeDescriptor(), bigQueryInsertCoder);
 
         options.setBigQueryWriteDisposition(WriteDisposition.WRITE_APPEND);
-        options.setBigQueryCreateDisposition(CreateDisposition.CREATE_NEVER);
         options.setBigQueryInsertMethod(Method.STREAMING_INSERTS);
 
         /*

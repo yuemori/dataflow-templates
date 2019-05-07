@@ -1,0 +1,48 @@
+substitutions:
+  _PIPELINE_FOLDER: "gs://wakaba260-dataflow-templates"
+
+steps:
+- id: 'run install and test'
+  name: 'maven:3.6.1-jdk-8'
+  entrypoint: 'mvn'
+  args: ["install"]
+
+- id: 'create PubSubToBigQueryDynamicDestination(subscription) template'
+  name: 'maven:3.6.1-jdk-8'
+  entrypoint: 'mvn'
+  args:
+  - compile
+  - exec:java
+  - -Dexec.mainClass=org.wakaba260.dataflow.templates.PubSubToBigQueryDynamicDestination
+  - -Dexec.cleanupDaemonThreads=false
+  - -Dexec.args="--project=${PROJECT_ID} --stagingLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/staging --tempLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/temp --templateLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/PubSub_Subscription_to_BigQuery_Dynamic_Destination --runner=DataflowRunner --useSubscription=true"
+
+- id: 'create PubSubToBigQueryDynamicDestination(topic) template'
+  name: 'maven:3.6.1-jdk-8'
+  entrypoint: 'mvn'
+  args:
+  - compile
+  - exec:java
+  - -Dexec.mainClass=org.wakaba260.dataflow.templates.PubSubToBigQueryDynamicDestination
+  - -Dexec.cleanupDaemonThreads=false
+  - -Dexec.args="--project=${PROJECT_ID} --stagingLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/staging --tempLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/temp --templateLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/PubSub_Topic_to_BigQuery_Dynamic_Destination --runner=DataflowRunner --useSubscription=false"
+
+- id: 'create TextIOToBigQueryDynamicDestination(WRITE_APPEND) template'
+  name: 'maven:3.6.1-jdk-8'
+  entrypoint: 'mvn'
+  args:
+  - compile
+  - exec:java
+  - -Dexec.mainClass=org.wakaba260.dataflow.templates.TextIOToBigQueryDynamicDestination
+  - -Dexec.cleanupDaemonThreads=false
+  - -Dexec.args="--project=${PROJECT_ID} --stagingLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/staging --tempLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/temp --templateLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/TextIO_to_BigQuery_Dynamic_Destination_APPEND --runner=DataflowRunner --bigQueryWriteDisposition=WRITE_APPEND"
+
+- id: 'create TextIOToBigQueryDynamicDestination(TRUNCATE) template'
+  name: 'maven:3.6.1-jdk-8'
+  entrypoint: 'mvn'
+  args:
+  - compile
+  - exec:java
+  - -Dexec.mainClass=org.wakaba260.dataflow.templates.TextIOToBigQueryDynamicDestination
+  - -Dexec.cleanupDaemonThreads=false
+  - -Dexec.args="--project=${PROJECT_ID} --stagingLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/staging --tempLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/temp --templateLocation=${_PIPELINE_FOLDER}/${COMMIT_SHA}/TextIO_to_BigQuery_Dynamic_Destination_TRUNCATE --runner=DataflowRunner --bigQueryWriteDisposition=WRITE_TRUNCATE"
